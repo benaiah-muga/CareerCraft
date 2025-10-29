@@ -1,12 +1,8 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import type { ResumeAnalysisResult, InterviewMessage, InterviewSummary } from '../types';
+import type { ResumeAnalysisResult, InterviewMessage, InterviewSummary, InterviewFeedback } from '../types';
 
-// Use Vite's standard for environment variables for Vercel deployment.
-const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-if (!apiKey) {
-    throw new Error("VITE_GEMINI_API_KEY is not set in the environment variables.");
-}
-const ai = new GoogleGenAI({ apiKey });
+// FIX: Per coding guidelines, API key must be obtained from process.env.API_KEY
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const resumeSchema = {
     type: Type.OBJECT,
@@ -19,6 +15,27 @@ const resumeSchema = {
     },
     required: ["score", "strengths", "weaknesses", "atsKeywords", "actionableImprovements"],
 };
+
+const interviewTurnSchema = {
+    type: Type.OBJECT,
+    properties: {
+        feedback: {
+            type: Type.OBJECT,
+            properties: {
+                clarity: { type: Type.STRING, description: "Feedback on the clarity of the user's response." },
+                confidence: { type: Type.STRING, description: "Feedback on the confidence projected in the user's response." },
+                relevance: { type: Type.STRING, description: "Feedback on the relevance of the user's response to the question." },
+            },
+            required: ["clarity", "confidence", "relevance"],
+        },
+        nextQuestion: {
+            type: Type.STRING,
+            description: "The next interview question to ask the user."
+        },
+    },
+    required: ["feedback", "nextQuestion"],
+};
+
 
 const interviewSummarySchema = {
     type: Type.OBJECT,
@@ -52,6 +69,51 @@ export const analyzeResume = async (resumeText: string, jobTitle: string, compan
         throw new Error("Failed to get analysis from AI. Please try again.");
     }
 };
+
+export const getInterviewResponse = async (history: InterviewMessage[], jobTitle: string, companyName?: string, jobDescription?: string): Promise<{ feedback: InterviewFeedback | null, nextQuestion: string }> => {
+    const isFirstTurn = history.length === 0;
+    const transcript = history.map(msg => `${msg.role === 'user' ? 'Candidate' : 'Interviewer'}: ${msg.content}`).join('\n');
+    
+    const prompt = `You are a friendly and professional AI interview coach. The user is preparing for a "${jobTitle}" role ${companyName ? `at "${companyName}"` : ''}. 
+    ${jobDescription ? `Here is the job description for context: "${jobDescription}"` : ''}
+    
+    This is the conversation so far:
+    ${transcript}
+    
+    ${isFirstTurn 
+        ? "Your task is to start the interview. Greet the user, introduce yourself briefly, and ask the first behavioral question. Do not provide feedback as there is no user answer yet." 
+        : "Your task is to act as the interviewer. First, provide brief, constructive feedback on the candidate's last answer. Then, ask the next logical interview question. Keep your feedback and questions concise."
+    }
+    
+    Provide your response in JSON format.`;
+
+    try {
+        // For the first question, we don't need structured feedback.
+        if (isFirstTurn) {
+            const response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash',
+                contents: prompt,
+            });
+            return { feedback: null, nextQuestion: response.text };
+        }
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: {
+                responseMimeType: 'application/json',
+                responseSchema: interviewTurnSchema,
+            },
+        });
+        const parsedResult = JSON.parse(response.text);
+        return parsedResult;
+
+    } catch (error) {
+        console.error("Error getting interview response:", error);
+        throw new Error("Failed to get interview response from AI.");
+    }
+};
+
 
 export const getInterviewSummary = async (history: InterviewMessage[], jobTitle: string): Promise<InterviewSummary> => {
     const transcript = history.map(msg => `${msg.role === 'user' ? 'Candidate' : 'Interviewer'}: ${msg.content}`).join('\n');

@@ -1,95 +1,39 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { InterviewMessage, InterviewSummary } from '../types';
-import { getInterviewSummary } from '../services/geminiService';
+import type { InterviewMessage, InterviewSummary, InterviewFeedback } from '../types';
+import { getInterviewResponse, getInterviewSummary } from '../services/geminiService';
 import ScoreCircle from '../components/ScoreCircle';
 import { CheckCircleIcon, LightbulbIcon, TargetIcon, ThumbsUpIcon, MicrophoneIcon, StopCircleIcon } from '../components/icons';
-import { GoogleGenAI, LiveServerMessage, Modality, Blob } from '@google/genai';
 
 type InterviewPhase = 'setup' | 'live' | 'summary';
 
-// Use Vite's standard for environment variables for Vercel deployment.
-const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-if (!apiKey) {
-    throw new Error("VITE_GEMINI_API_KEY is not set in the environment variables.");
-}
-const ai = new GoogleGenAI({ apiKey });
 const totalQuestions = 5;
 
-// --- Audio Helper Functions ---
-function encode(bytes: Uint8Array) {
-  let binary = '';
-  const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
-
-function decode(base64: string) {
-  const binaryString = atob(base64);
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes;
-}
-
-async function decodeAudioData(
-  data: Uint8Array, ctx: AudioContext, sampleRate: number, numChannels: number
-): Promise<AudioBuffer> {
-  const dataInt16 = new Int16Array(data.buffer);
-  const frameCount = dataInt16.length / numChannels;
-  const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
-  for (let channel = 0; channel < numChannels; channel++) {
-    const channelData = buffer.getChannelData(channel);
-    for (let i = 0; i < frameCount; i++) {
-      channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
-    }
-  }
-  return buffer;
-}
-
-function createBlob(data: Float32Array): Blob {
-  const l = data.length;
-  const int16 = new Int16Array(l);
-  for (let i = 0; i < l; i++) {
-    int16[i] = data[i] * 32768;
-  }
-  return {
-    data: encode(new Uint8Array(int16.buffer)),
-    mimeType: 'audio/pcm;rate=16000',
-  };
-}
-// --- End Audio Helper Functions ---
+// FIX: Cast window to any to access SpeechRecognition properties which may not be in the default type definition.
+// Check for browser speech recognition support
+const SpeechRecognitionAPI = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+// FIX: Use the renamed variable to avoid name collision.
+const isSpeechRecognitionSupported = !!SpeechRecognitionAPI;
 
 const InterviewSimulator: React.FC = () => {
     const [phase, setPhase] = useState<InterviewPhase>('setup');
     const [jobTitle, setJobTitle] = useState('');
     const [companyName, setCompanyName] = useState('');
     const [jobDescription, setJobDescription] = useState('');
+    
     const [history, setHistory] = useState<InterviewMessage[]>([]);
+    const [currentMessage, setCurrentMessage] = useState('');
+    
     const [error, setError] = useState<string | null>(null);
     const [summary, setSummary] = useState<InterviewSummary | null>(null);
-    const [questionCount, setQuestionCount] = useState(0);
-
-    const [isConnecting, setIsConnecting] = useState(false);
+    
+    const [isLoading, setIsLoading] = useState(false); // For initial loading
+    const [isAiThinking, setIsAiThinking] = useState(false); // For turn-based loading
+    
     const [loadingMessage, setLoadingMessage] = useState('');
+    
     const [isRecording, setIsRecording] = useState(false);
-    const [currentInputTranscription, setCurrentInputTranscription] = useState('');
-    
-    const sessionPromiseRef = useRef<ReturnType<typeof ai.live.connect> | null>(null);
-    const mediaStreamRef = useRef<MediaStream | null>(null);
-    const audioContextRef = useRef<AudioContext | null>(null);
-    const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
-    const mediaStreamSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-    
-    const outputAudioContextRef = useRef<AudioContext | null>(null);
-    const nextStartTimeRef = useRef(0);
-    const audioSources = useRef(new Set<AudioBufferSourceNode>());
-    
-    const loadingTimeoutRef = useRef<number | null>(null);
-    const hasStartedRef = useRef(false);
+    // FIX: Use `any` for the ref type as SpeechRecognition type is not available and there's a name collision with the variable.
+    const recognitionRef = useRef<any | null>(null);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     
@@ -99,254 +43,158 @@ const InterviewSimulator: React.FC = () => {
 
     useEffect(() => {
         scrollToBottom();
-    }, [history]);
+    }, [history, isAiThinking]);
+    
+    // --- Speech Recognition Logic ---
+    useEffect(() => {
+        if (!isSpeechRecognitionSupported) {
+            console.warn("SpeechRecognition is not supported by this browser.");
+            return;
+        }
 
-    const stopRecording = useCallback(() => {
-        if (scriptProcessorRef.current) {
-            scriptProcessorRef.current.disconnect();
-            scriptProcessorRef.current = null;
-        }
-        if (mediaStreamSourceRef.current) {
-            mediaStreamSourceRef.current.disconnect();
-            mediaStreamSourceRef.current = null;
-        }
-        if (mediaStreamRef.current) {
-            mediaStreamRef.current.getTracks().forEach(track => track.stop());
-            mediaStreamRef.current = null;
-        }
-        setIsRecording(false);
-    }, []);
+        // FIX: Use renamed variable `SpeechRecognitionAPI` to create a new instance.
+        recognitionRef.current = new SpeechRecognitionAPI();
+        const recognition = recognitionRef.current;
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
 
-    const startRecording = useCallback(async () => {
-        if (isRecording || !sessionPromiseRef.current) return;
-        try {
-            if (!audioContextRef.current) {
-                audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+        recognition.onresult = (event: any) => {
+            let interimTranscript = '';
+            let finalTranscript = '';
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                if (event.results[i].isFinal) {
+                    finalTranscript += event.results[i][0].transcript;
+                } else {
+                    interimTranscript += event.results[i][0].transcript;
+                }
             }
-            if (audioContextRef.current.state === 'suspended') {
-                 await audioContextRef.current.resume();
-            }
+            setCurrentMessage(prev => prev + finalTranscript + interimTranscript);
+        };
 
-            mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
-            setIsRecording(true);
-
-            mediaStreamSourceRef.current = audioContextRef.current.createMediaStreamSource(mediaStreamRef.current);
-            scriptProcessorRef.current = audioContextRef.current.createScriptProcessor(4096, 1, 1);
-
-            scriptProcessorRef.current.onaudioprocess = (audioProcessingEvent) => {
-                const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
-                const pcmBlob = createBlob(inputData);
-                sessionPromiseRef.current?.then((session) => {
-                    session.sendRealtimeInput({ media: pcmBlob });
-                });
-            };
-
-            mediaStreamSourceRef.current.connect(scriptProcessorRef.current);
-            scriptProcessorRef.current.connect(audioContextRef.current.destination);
-        } catch (err) {
-            console.error('Error starting recording:', err);
-            setError('Microphone access was denied. Please allow microphone access to use this feature.');
+        recognition.onend = () => {
             setIsRecording(false);
-        }
-    }, [isRecording]);
+        };
+        
+        recognition.onerror = (event: any) => {
+            console.error("Speech recognition error", event.error);
+            setError(`Speech recognition error: ${event.error}`);
+            setIsRecording(false);
+        };
 
+        return () => {
+            recognition.stop();
+        };
+    }, []);
 
     const handleMicToggle = () => {
         if (isRecording) {
-            stopRecording();
+            recognitionRef.current?.stop();
         } else {
-            startRecording();
+            setCurrentMessage(''); // Clear previous text before starting new transcription
+            recognitionRef.current?.start();
         }
+        setIsRecording(!isRecording);
     };
+    // --- End Speech Recognition Logic ---
 
-    const beginLiveInterview = useCallback((loadingIntervalId: number) => {
-        if (hasStartedRef.current) return;
-        hasStartedRef.current = true;
+    const startInterview = useCallback(async () => {
+        setIsLoading(true);
+        setError(null);
+        setHistory([]);
+        
+        const loadingMessages = ["Interviewer preparing...", "Reviewing job description...", "Finalizing questions..."];
+        let messageIndex = 0;
+        const intervalId = setInterval(() => {
+            setLoadingMessage(loadingMessages[messageIndex]);
+            messageIndex = (messageIndex + 1) % loadingMessages.length;
+        }, 1500);
 
-        if (loadingTimeoutRef.current) {
-            clearTimeout(loadingTimeoutRef.current);
-            loadingTimeoutRef.current = null;
-        }
-        // Fix: Explicitly use window.clearInterval to avoid type conflicts with Node.js types.
-        window.clearInterval(loadingIntervalId);
-        setIsConnecting(false);
-        setPhase('live');
-        startRecording();
-    }, [startRecording]);
-    
-    const handleStartInterview = useCallback(async (event: React.FormEvent) => {
+        setTimeout(async () => {
+            try {
+                const response = await getInterviewResponse([], jobTitle, companyName, jobDescription);
+                setHistory([{ role: 'model', content: response.nextQuestion }]);
+            } catch (err: any) {
+                setError(err.message);
+            } finally {
+                clearInterval(intervalId);
+                setIsLoading(false);
+                setPhase('live');
+            }
+        }, 4000); // Simulate preparation time
+        
+    }, [jobTitle, companyName, jobDescription]);
+
+    const handleStartInterviewSubmit = (event: React.FormEvent) => {
         event.preventDefault();
         if (!jobTitle) {
             setError("Please enter a job title to begin.");
             return;
         }
-        
-        hasStartedRef.current = false;
-        const loadingMessages = ["Interviewer preparing...", "Reviewing job description...", "Finalizing questions..."];
-        let messageIndex = 0;
-        // Fix: Explicitly use window.setInterval to avoid type conflicts with Node.js types.
-        const intervalId = window.setInterval(() => {
-            setLoadingMessage(loadingMessages[messageIndex]);
-            messageIndex = (messageIndex + 1) % loadingMessages.length;
-        }, 2000);
+        startInterview();
+    };
 
-        setIsConnecting(true);
-        setLoadingMessage(loadingMessages[0]);
+    const handleSendMessage = async (event: React.FormEvent) => {
+        event.preventDefault();
+        if (!currentMessage.trim()) return;
+
+        const newUserMessage: InterviewMessage = { role: 'user', content: currentMessage };
+        const newHistory = [...history, newUserMessage];
+        setHistory(newHistory);
+        setCurrentMessage('');
+        setIsAiThinking(true);
         setError(null);
-        
-        loadingTimeoutRef.current = window.setTimeout(() => beginLiveInterview(intervalId), 6000);
 
-        outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-        const outputNode = outputAudioContextRef.current.createGain();
-        outputNode.connect(outputAudioContextRef.current.destination);
-
-        const systemInstruction = `You are a friendly and professional AI interview coach. The user is preparing for a "${jobTitle}" role ${companyName ? `at "${companyName}"` : ''}. 
-        ${jobDescription ? `Here is the job description: "${jobDescription}"` : ''}
-        Start the interview by introducing yourself briefly and asking the first behavioral question. Keep your responses concise. You will conduct an interview of ${totalQuestions} questions. After the final question, say something brief like "That's all the questions I have. I'll now compile your feedback."`;
-
-        let currentOutputTranscription = '';
-
-        sessionPromiseRef.current = ai.live.connect({
-            // Fix: Corrected typo in model name.
-            model: 'gemini-2.5-flash-native-audio-preview-09-2025',
-            config: {
-                responseModalities: [Modality.AUDIO],
-                speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
-                systemInstruction: systemInstruction,
-                inputAudioTranscription: {},
-                outputAudioTranscription: {},
-            },
-            callbacks: {
-                onopen: () => {},
-                onmessage: async (message: LiveServerMessage) => {
-                    if (message.serverContent?.inputTranscription) {
-                        setCurrentInputTranscription(prev => prev + message.serverContent.inputTranscription.text);
-                    }
-                    if (message.serverContent?.outputTranscription) {
-                        currentOutputTranscription += message.serverContent.outputTranscription.text;
-                    }
-
-                    const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
-                    if (base64Audio && outputAudioContextRef.current) {
-                        nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputAudioContextRef.current.currentTime);
-                        const audioBuffer = await decodeAudioData(decode(base64Audio), outputAudioContextRef.current, 24000, 1);
-                        const source = outputAudioContextRef.current.createBufferSource();
-                        source.buffer = audioBuffer;
-                        source.connect(outputNode);
-                        source.addEventListener('ended', () => audioSources.current.delete(source));
-                        source.start(nextStartTimeRef.current);
-                        nextStartTimeRef.current += audioBuffer.duration;
-                        audioSources.current.add(source);
-                    }
-
-                    if (message.serverContent?.interrupted) {
-                        for (const source of audioSources.current.values()) {
-                          source.stop();
-                          audioSources.current.delete(source);
-                        }
-                        nextStartTimeRef.current = 0;
-                    }
-
-                    if (message.serverContent?.turnComplete) {
-                        const finalInput = currentInputTranscription;
-                        const finalOutput = currentOutputTranscription;
-                        setCurrentInputTranscription('');
-                        currentOutputTranscription = '';
-
-                        let isLastQuestion = false;
-                        let finalHistoryForSummary: InterviewMessage[] = [];
-
-                        if (finalOutput) { // Only count AI turns
-                             setQuestionCount(prev => {
-                                const newCount = prev + 1;
-                                isLastQuestion = newCount >= totalQuestions;
-                                return newCount;
-                            });
-                        }
-
-                        setHistory(prev => {
-                            const newHistory = [...prev];
-                            if (finalInput) newHistory.push({ role: 'user', content: finalInput });
-                            if (finalOutput) newHistory.push({ role: 'model', content: finalOutput });
-                            finalHistoryForSummary = newHistory;
-                            return newHistory;
-                        });
-
-                        if (!hasStartedRef.current) {
-                           beginLiveInterview(intervalId);
-                        }
-                         
-                         if (isLastQuestion && finalInput) {
-                            setIsConnecting(true);
-                            setLoadingMessage("Compiling your feedback...");
-                            stopRecording();
-                            sessionPromiseRef.current?.then(s => s.close());
-                            
-                            setTimeout(async () => {
-                                const summaryResult = await getInterviewSummary(finalHistoryForSummary, jobTitle);
-                                setSummary(summaryResult);
-                                setPhase('summary');
-                                setIsConnecting(false);
-                            }, 3000);
-                         }
-                    }
-                },
-                onerror: (e: ErrorEvent) => {
-                    console.error('Session error:', e);
-                    setError('A connection error occurred. Please try again.');
-                    setIsConnecting(false);
-                    // Fix: Explicitly use window.clearInterval to avoid type conflicts with Node.js types.
-                    window.clearInterval(intervalId);
-                },
-                onclose: (e: CloseEvent) => {
-                    stopRecording();
-                },
-            },
-        });
-    }, [jobTitle, companyName, jobDescription, beginLiveInterview, stopRecording]);
-
-    const cleanUp = useCallback(() => {
-        stopRecording();
-        sessionPromiseRef.current?.then(s => s.close()).catch(console.error);
-        sessionPromiseRef.current = null;
-        if(audioContextRef.current && audioContextRef.current.state !== 'closed') {
-            audioContextRef.current.close();
-            audioContextRef.current = null;
+        // End interview after reaching question limit
+        const questionCount = history.filter(m => m.role === 'model').length;
+        if (questionCount >= totalQuestions) {
+            setIsLoading(true);
+            setLoadingMessage("Compiling your feedback...");
+            try {
+                const summaryResult = await getInterviewSummary(newHistory, jobTitle);
+                setSummary(summaryResult);
+                setPhase('summary');
+            } catch (err: any) {
+                setError(err.message);
+            } finally {
+                setIsLoading(false);
+                setIsAiThinking(false);
+            }
+            return;
         }
-        if(outputAudioContextRef.current && outputAudioContextRef.current.state !== 'closed') {
-            outputAudioContextRef.current.close();
-            outputAudioContextRef.current = null;
-        }
-        if (loadingTimeoutRef.current) {
-            // Fix: Explicitly use window.clearTimeout to avoid type conflicts with Node.js types.
-            window.clearTimeout(loadingTimeoutRef.current);
-            loadingTimeoutRef.current = null;
-        }
-    }, [stopRecording]);
 
-    useEffect(() => {
-        return () => {
-            cleanUp();
-        };
-    }, [cleanUp]);
-
+        try {
+            const response = await getInterviewResponse(newHistory, jobTitle, companyName, jobDescription);
+            const newModelMessage: InterviewMessage = {
+                role: 'model',
+                content: response.nextQuestion,
+                feedback: response.feedback ?? undefined
+            };
+            setHistory(prev => [...prev, newModelMessage]);
+        } catch (err: any) {
+            setError(err.message);
+        } finally {
+            setIsAiThinking(false);
+        }
+    };
+    
     const resetInterview = () => {
-        cleanUp();
         setHistory([]);
         setError(null);
         setSummary(null);
-        setQuestionCount(0);
         setPhase('setup');
-        setIsConnecting(false);
-        setIsRecording(false);
-        setCurrentInputTranscription('');
+        setIsLoading(false);
+        setIsAiThinking(false);
+        setCurrentMessage('');
     };
+    
+    const cleanMarkdown = (text: string) => text.replace(/\*\*/g, '');
 
     const renderSetup = () => (
         <div className="w-full max-w-lg mx-auto">
             <h2 className="text-2xl sm:text-3xl font-bold text-center mb-2">Interview Simulator</h2>
             <p className="text-center text-gray-500 mb-6">Prepare for your next big role. Fill in the details below to start your mock interview.</p>
-            <form onSubmit={handleStartInterview} className="bg-white p-6 sm:p-8 rounded-xl shadow-md space-y-4">
+            <form onSubmit={handleStartInterviewSubmit} className="bg-white p-6 sm:p-8 rounded-xl shadow-md space-y-4">
                 <input type="text" value={jobTitle} onChange={e => setJobTitle(e.target.value)} placeholder="e.g. Product Manager" className="w-full p-3 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500" required/>
                 <input type="text" value={companyName} onChange={e => setCompanyName(e.target.value)} placeholder="Company Name (Optional)" className="w-full p-3 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500"/>
                 <textarea value={jobDescription} onChange={e => setJobDescription(e.target.value)} placeholder="Job Description (Optional)" className="w-full p-3 border border-gray-300 rounded-lg h-24 text-gray-900 placeholder-gray-500"/>
@@ -370,17 +218,28 @@ const InterviewSimulator: React.FC = () => {
         </div>
       </div>
     );
+    
+    const FeedbackDisplay: React.FC<{ feedback: InterviewFeedback }> = ({ feedback }) => (
+        <div className="mt-2 ml-10 border-l-2 border-gray-200 pl-4 animate-fadeIn">
+            <h4 className="text-sm font-semibold text-gray-600 mb-2">Feedback on your answer:</h4>
+            <div className="space-y-1 text-sm">
+                <p className="flex items-start"><CheckCircleIcon className="w-4 h-4 text-green-500 mr-2 mt-0.5 flex-shrink-0" /> <strong>Clarity:</strong> {cleanMarkdown(feedback.clarity)}</p>
+                <p className="flex items-start"><ThumbsUpIcon className="w-4 h-4 text-blue-500 mr-2 mt-0.5 flex-shrink-0" /> <strong>Confidence:</strong> {cleanMarkdown(feedback.confidence)}</p>
+                <p className="flex items-start"><TargetIcon className="w-4 h-4 text-yellow-500 mr-2 mt-0.5 flex-shrink-0" /> <strong>Relevance:</strong> {cleanMarkdown(feedback.relevance)}</p>
+            </div>
+        </div>
+    );
 
     const renderLive = () => (
         <div className="w-full max-w-2xl mx-auto bg-white rounded-xl shadow-lg flex flex-col h-[80vh]">
-             <div className="p-4 border-b border-gray-200">
+            <div className="p-4 border-b border-gray-200">
                 <div className="flex items-center">
                     <button onClick={resetInterview} className="text-gray-500 hover:text-gray-800 mr-4">
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
                     </button>
                     <div>
                         <h3 className="font-bold">Live Interview</h3>
-                        <p className="text-sm text-gray-500">Question {Math.min(questionCount, totalQuestions)} of {totalQuestions}</p>
+                        <p className="text-sm text-gray-500">Question {Math.min(history.filter(m => m.role === 'model').length, totalQuestions)} of {totalQuestions}</p>
                     </div>
                 </div>
             </div>
@@ -393,31 +252,59 @@ const InterviewSimulator: React.FC = () => {
                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" /></svg>
                                 </div>
                                 <div className="bg-gray-100 rounded-lg p-3 max-w-lg">
-                                    <p>{msg.content}</p>
+                                    <p>{cleanMarkdown(msg.content)}</p>
                                 </div>
                             </div>
                         ) : (
-                            <div className="flex flex-col items-end">
-                                <div className="bg-blue-500 text-white rounded-lg p-3 max-w-lg">
-                                    <p>{msg.content}</p>
+                            <>
+                                <div className="flex flex-col items-end">
+                                    <div className="bg-blue-500 text-white rounded-lg p-3 max-w-lg">
+                                        <p>{msg.content}</p>
+                                    </div>
                                 </div>
-                            </div>
+                                {history[index+1]?.feedback && <FeedbackDisplay feedback={history[index+1].feedback!} />}
+                            </>
                         )}
                     </div>
                 ))}
+                {isAiThinking && (
+                    <div className="flex items-start space-x-3">
+                        <div className="bg-gray-200 text-gray-700 p-2 rounded-full">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" /></svg>
+                        </div>
+                        <div className="bg-gray-100 rounded-lg p-3 max-w-lg flex items-center space-x-2">
+                           <span className="h-2 w-2 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                           <span className="h-2 w-2 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                           <span className="h-2 w-2 bg-gray-400 rounded-full animate-bounce"></span>
+                        </div>
+                    </div>
+                )}
                 <div ref={messagesEndRef} />
             </div>
-            <div className="p-4 border-t border-gray-200">
-                 <div className="flex items-center space-x-4">
-                     <p className="flex-grow p-3 bg-gray-100 border border-gray-300 rounded-lg text-gray-700 min-h-[50px] italic">
-                         {currentInputTranscription || (isRecording ? "Listening..." : "Click mic to speak")}
-                     </p>
-                    <button onClick={handleMicToggle} className={`p-3 rounded-full text-white transition-colors ${isRecording ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-500 hover:bg-blue-600'}`}>
-                        {isRecording ? <StopCircleIcon className="w-6 h-6" /> : <MicrophoneIcon className="w-6 h-6" />}
-                    </button>
+            <form onSubmit={handleSendMessage} className="p-4 border-t border-gray-200">
+                 <div className="flex items-center space-x-2">
+                     <textarea
+                        value={currentMessage}
+                        onChange={e => setCurrentMessage(e.target.value)}
+                        placeholder="Type your answer here..."
+                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition text-gray-900 placeholder-gray-500 resize-none"
+                        rows={2}
+                        onKeyDown={e => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                handleSendMessage(e);
+                            }
+                        }}
+                     />
+                    {isSpeechRecognitionSupported && (
+                        <button type="button" onClick={handleMicToggle} className={`p-3 rounded-full text-white transition-colors flex-shrink-0 ${isRecording ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-500 hover:bg-blue-600'}`}>
+                            {isRecording ? <StopCircleIcon className="w-6 h-6" /> : <MicrophoneIcon className="w-6 h-6" />}
+                        </button>
+                    )}
+                    <button type="submit" disabled={isAiThinking} className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-5 rounded-lg transition-colors disabled:bg-blue-300">Send</button>
                 </div>
                  {error && <p className="text-red-500 text-center mt-2">{error}</p>}
-            </div>
+            </form>
         </div>
     );
     
@@ -436,13 +323,13 @@ const InterviewSimulator: React.FC = () => {
                         <div>
                             <h4 className="font-bold text-lg mb-3 flex items-center"><ThumbsUpIcon className="w-6 h-6 text-green-500 mr-2"/>Your Strengths</h4>
                             <ul className="space-y-2">
-                                {summary.strengths.map((s, i) => <li key={i} className="flex items-start"><CheckCircleIcon className="w-5 h-5 text-green-500 mr-2 mt-1 flex-shrink-0"/><span>{s}</span></li>)}
+                                {summary.strengths.map((s, i) => <li key={i} className="flex items-start"><CheckCircleIcon className="w-5 h-5 text-green-500 mr-2 mt-1 flex-shrink-0"/><span>{cleanMarkdown(s)}</span></li>)}
                             </ul>
                         </div>
                          <div>
                             <h4 className="font-bold text-lg mb-3 flex items-center"><LightbulbIcon className="w-6 h-6 text-yellow-500 mr-2"/>Areas for Improvement</h4>
                             <ul className="space-y-2">
-                                {summary.areasForImprovement.map((a, i) => <li key={i} className="flex items-start"><TargetIcon className="w-5 h-5 text-yellow-500 mr-2 mt-1 flex-shrink-0"/><span>{a}</span></li>)}
+                                {summary.areasForImprovement.map((a, i) => <li key={i} className="flex items-start"><TargetIcon className="w-5 h-5 text-yellow-500 mr-2 mt-1 flex-shrink-0"/><span>{cleanMarkdown(a)}</span></li>)}
                             </ul>
                         </div>
                     </div>
@@ -458,7 +345,7 @@ const InterviewSimulator: React.FC = () => {
 
     return (
         <>
-            {isConnecting && <FullScreenLoader />}
+            {isLoading && <FullScreenLoader />}
             {(() => {
                 switch (phase) {
                     case 'live': return renderLive();
