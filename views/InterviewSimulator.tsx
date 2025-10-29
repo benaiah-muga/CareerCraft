@@ -3,12 +3,11 @@ import type { InterviewMessage, InterviewSummary } from '../types';
 import { getInterviewSummary } from '../services/geminiService';
 import ScoreCircle from '../components/ScoreCircle';
 import { CheckCircleIcon, LightbulbIcon, TargetIcon, ThumbsUpIcon, MicrophoneIcon, StopCircleIcon } from '../components/icons';
-// Fix: Removed non-exported member 'LiveSession'.
 import { GoogleGenAI, LiveServerMessage, Modality, Blob } from '@google/genai';
 
 type InterviewPhase = 'setup' | 'live' | 'summary';
-// Fix: Use process.env.API_KEY as per guidelines.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Fix: Use import.meta.env.VITE_GEMINI_API_KEY for Vite environment variables.
+const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
 const totalQuestions = 5;
 
 // --- Audio Helper Functions ---
@@ -75,7 +74,6 @@ const InterviewSimulator: React.FC = () => {
     const [currentInputTranscription, setCurrentInputTranscription] = useState('');
     const [currentOutputTranscription, setCurrentOutputTranscription] = useState('');
     
-    // Fix: Inferred session promise type instead of using non-exported 'LiveSession'.
     const sessionPromiseRef = useRef<ReturnType<typeof ai.live.connect> | null>(null);
     const mediaStreamRef = useRef<MediaStream | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
@@ -116,7 +114,6 @@ const InterviewSimulator: React.FC = () => {
         if (isRecording || !sessionPromiseRef.current) return;
         try {
             if (!audioContextRef.current) {
-                // Fix: Added type assertion for vendor-prefixed webkitAudioContext.
                 audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
             }
             if (audioContextRef.current.state === 'suspended') {
@@ -173,7 +170,6 @@ const InterviewSimulator: React.FC = () => {
         setLoadingMessage(loadingMessages[0]);
         setError(null);
 
-        // Fix: Added type assertion for vendor-prefixed webkitAudioContext.
         outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
         const outputNode = outputAudioContextRef.current.createGain();
         outputNode.connect(outputAudioContextRef.current.destination);
