@@ -16,6 +16,16 @@ const resumeSchema = {
     required: ["score", "strengths", "weaknesses", "atsKeywords", "actionableImprovements"],
 };
 
+const firstTurnSchema = {
+    type: Type.OBJECT,
+    properties: {
+        greeting: { type: Type.STRING, description: "A friendly greeting to the user, like 'Hello!' or 'Hi there'." },
+        introduction: { type: Type.STRING, description: "A brief introduction of the AI coach and the context of the interview." },
+        firstQuestion: { type: Type.STRING, description: "The first interview question to ask the user." },
+    },
+    required: ["greeting", "introduction", "firstQuestion"],
+};
+
 const interviewTurnSchema = {
     type: Type.OBJECT,
     properties: {
@@ -88,13 +98,18 @@ export const getInterviewResponse = async (history: InterviewMessage[], jobTitle
     Provide your response in JSON format.`;
 
     try {
-        // For the first question, we don't need structured feedback.
         if (isFirstTurn) {
             const response = await ai.models.generateContent({
                 model: 'gemini-2.5-flash',
                 contents: prompt,
+                config: {
+                    responseMimeType: 'application/json',
+                    responseSchema: firstTurnSchema,
+                },
             });
-            return { feedback: null, nextQuestion: response.text };
+            const parsedResult = JSON.parse(response.text);
+            const combinedMessage = `${parsedResult.greeting} ${parsedResult.introduction} ${parsedResult.firstQuestion}`;
+            return { feedback: null, nextQuestion: combinedMessage };
         }
 
         const response = await ai.models.generateContent({
