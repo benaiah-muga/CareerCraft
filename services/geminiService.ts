@@ -1,8 +1,12 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import type { ResumeAnalysisResult, InterviewMessage, InterviewSummary } from '../types';
 
-// Fix: Use process.env.API_KEY to align with environment variable standards.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Use Vite's standard for environment variables for Vercel deployment.
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+if (!apiKey) {
+    throw new Error("VITE_GEMINI_API_KEY is not set in the environment variables.");
+}
+const ai = new GoogleGenAI({ apiKey });
 
 const resumeSchema = {
     type: Type.OBJECT,

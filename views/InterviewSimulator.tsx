@@ -6,8 +6,13 @@ import { CheckCircleIcon, LightbulbIcon, TargetIcon, ThumbsUpIcon, MicrophoneIco
 import { GoogleGenAI, LiveServerMessage, Modality, Blob } from '@google/genai';
 
 type InterviewPhase = 'setup' | 'live' | 'summary';
-// Fix: Use process.env.API_KEY to align with environment variable standards.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+// Use Vite's standard for environment variables for Vercel deployment.
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+if (!apiKey) {
+    throw new Error("VITE_GEMINI_API_KEY is not set in the environment variables.");
+}
+const ai = new GoogleGenAI({ apiKey });
 const totalQuestions = 5;
 
 // --- Audio Helper Functions ---
