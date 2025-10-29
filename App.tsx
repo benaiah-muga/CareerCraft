@@ -15,7 +15,7 @@ const App: React.FC = () => {
       case 'resume':
         return <ResumeAnalyzer setView={setCurrentView} />;
       case 'interview':
-        return <InterviewSimulator />;
+        return <InterviewSimulator setView={setCurrentView} />;
       case 'home':
       default:
         return <Home setView={setCurrentView} />;

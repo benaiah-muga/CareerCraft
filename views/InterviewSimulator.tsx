@@ -3,6 +3,7 @@ import type { InterviewMessage, InterviewSummary, InterviewFeedback } from '../t
 import { getInterviewResponse, getInterviewSummary } from '../services/geminiService';
 import ScoreCircle from '../components/ScoreCircle';
 import { CheckCircleIcon, LightbulbIcon, TargetIcon, ThumbsUpIcon, MicrophoneIcon, StopCircleIcon } from '../components/icons';
+import type { View } from '../App';
 
 type InterviewPhase = 'setup' | 'live' | 'summary';
 
@@ -14,7 +15,11 @@ const SpeechRecognitionAPI = (window as any).SpeechRecognition || (window as any
 // FIX: Use the renamed variable to avoid name collision.
 const isSpeechRecognitionSupported = !!SpeechRecognitionAPI;
 
-const InterviewSimulator: React.FC = () => {
+interface InterviewSimulatorProps {
+  setView: (view: View) => void;
+}
+
+const InterviewSimulator: React.FC<InterviewSimulatorProps> = ({ setView }) => {
     const [phase, setPhase] = useState<InterviewPhase>('setup');
     const [jobTitle, setJobTitle] = useState('');
     const [companyName, setCompanyName] = useState('');
@@ -199,9 +204,18 @@ const InterviewSimulator: React.FC = () => {
                 <input type="text" value={companyName} onChange={e => setCompanyName(e.target.value)} placeholder="Company Name (Optional)" className="w-full p-3 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500"/>
                 <textarea value={jobDescription} onChange={e => setJobDescription(e.target.value)} placeholder="Job Description (Optional)" className="w-full p-3 border border-gray-300 rounded-lg h-24 text-gray-900 placeholder-gray-500"/>
                 <p className="text-xs text-gray-400 text-center">Your data is private and is not stored.</p>
-                <button type="submit" className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 rounded-lg">
-                    Start Interview
-                </button>
+                <div className="flex flex-col sm:flex-row-reverse gap-4 pt-2">
+                    <button type="submit" className="w-full sm:w-auto flex-grow bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-6 rounded-lg transition duration-300">
+                        Start Interview
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setView('home')}
+                        className="w-full sm:w-auto flex-grow bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-3 px-6 rounded-lg transition duration-300"
+                    >
+                        Back to Home
+                    </button>
+                </div>
                 {error && <p className="text-red-500 text-center">{error}</p>}
             </form>
         </div>
