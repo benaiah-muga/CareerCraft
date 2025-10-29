@@ -1,7 +1,8 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import type { ResumeAnalysisResult, InterviewMessage, InterviewSummary, InterviewFeedback } from '../types';
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
 
 const resumeSchema = {
     type: Type.OBJECT,
@@ -84,7 +85,6 @@ export const startInterview = async (jobTitle: string, companyName?: string, job
 
 export const getNextInterviewStep = async (history: InterviewMessage[], jobTitle: string): Promise<{ feedback: InterviewFeedback; nextQuestion: string; }> => {
     const transcript = history.map(msg => `${msg.role === 'user' ? 'Candidate' : 'Interviewer'}: ${msg.content}`).join('\n');
-    // Fix: Replace findLast with a compatible alternative for older JS environments.
     const lastAnswer = [...history].reverse().find(msg => msg.role === 'user')?.content || '';
 
     const prompt = `You are an AI interview coach. Here is the transcript of our interview so far for the role of "${jobTitle}":\n${transcript}\n
