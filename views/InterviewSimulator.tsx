@@ -30,7 +30,7 @@ const InterviewSimulator: React.FC = () => {
 
     useEffect(() => {
         scrollToBottom();
-    }, [history]);
+    }, [history, isLoading]);
 
     const handleStartInterview = useCallback(async (event: React.FormEvent) => {
         event.preventDefault();
@@ -130,6 +130,19 @@ const InterviewSimulator: React.FC = () => {
             </div>
         </div>
     );
+    
+    const TypingIndicator = () => (
+      <div className="flex items-start space-x-3">
+          <div className="bg-gray-200 text-gray-700 p-2 rounded-full">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" /></svg>
+          </div>
+          <div className="bg-gray-100 rounded-lg p-3 max-w-lg flex items-center space-x-1">
+              <span className="w-2 h-2 bg-gray-400 rounded-full animate-pulse delay-0"></span>
+              <span className="w-2 h-2 bg-gray-400 rounded-full animate-pulse delay-150"></span>
+              <span className="w-2 h-2 bg-gray-400 rounded-full animate-pulse delay-300"></span>
+          </div>
+      </div>
+    );
 
     const renderLive = () => (
         <div className="w-full max-w-2xl mx-auto bg-white rounded-xl shadow-lg flex flex-col h-[80vh]">
@@ -162,17 +175,18 @@ const InterviewSimulator: React.FC = () => {
                                     <p>{msg.content}</p>
                                 </div>
                                 {msg.feedback && (
-                                    <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg w-full max-w-lg space-y-2">
-                                        <h4 className="font-semibold text-sm text-green-800">Feedback on your answer:</h4>
-                                        <FeedbackPill icon={<CheckCircleIcon className="w-5 h-5 text-green-600"/>} label="Clarity" text={cleanMarkdown(msg.feedback.clarity)} />
-                                        <FeedbackPill icon={<CheckCircleIcon className="w-5 h-5 text-green-600"/>} label="Confidence" text={cleanMarkdown(msg.feedback.confidence)} />
-                                        <FeedbackPill icon={<CheckCircleIcon className="w-5 h-5 text-green-600"/>} label="Relevance" text={cleanMarkdown(msg.feedback.relevance)} />
+                                    <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg w-full max-w-lg space-y-2 animate-fadeIn">
+                                        <h4 className="font-semibold text-sm text-gray-700">Feedback on your answer:</h4>
+                                        <FeedbackPill icon={<LightbulbIcon className="w-5 h-5 text-blue-500"/>} label="Clarity" text={cleanMarkdown(msg.feedback.clarity)} />
+                                        <FeedbackPill icon={<ThumbsUpIcon className="w-5 h-5 text-green-500"/>} label="Confidence" text={cleanMarkdown(msg.feedback.confidence)} />
+                                        <FeedbackPill icon={<TargetIcon className="w-5 h-5 text-yellow-500"/>} label="Relevance" text={cleanMarkdown(msg.feedback.relevance)} />
                                     </div>
                                 )}
                             </div>
                         )}
                     </div>
                 ))}
+                {isLoading && history[history.length - 1]?.role === 'user' && <TypingIndicator />}
                 <div ref={messagesEndRef} />
             </div>
             <div className="p-4 border-t border-gray-200">
