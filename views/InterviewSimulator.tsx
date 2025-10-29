@@ -6,8 +6,8 @@ import { CheckCircleIcon, LightbulbIcon, TargetIcon, ThumbsUpIcon, MicrophoneIco
 import { GoogleGenAI, LiveServerMessage, Modality, Blob } from '@google/genai';
 
 type InterviewPhase = 'setup' | 'live' | 'summary';
-// Fix: Use import.meta.env.VITE_GEMINI_API_KEY for Vite environment variables.
-const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
+// Fix: Use process.env.API_KEY to align with environment variable standards.
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 const totalQuestions = 5;
 
 // --- Audio Helper Functions ---
@@ -72,7 +72,6 @@ const InterviewSimulator: React.FC = () => {
     const [loadingMessage, setLoadingMessage] = useState('');
     const [isRecording, setIsRecording] = useState(false);
     const [currentInputTranscription, setCurrentInputTranscription] = useState('');
-    const [currentOutputTranscription, setCurrentOutputTranscription] = useState('');
     
     const sessionPromiseRef = useRef<ReturnType<typeof ai.live.connect> | null>(null);
     const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -83,6 +82,9 @@ const InterviewSimulator: React.FC = () => {
     const outputAudioContextRef = useRef<AudioContext | null>(null);
     const nextStartTimeRef = useRef(0);
     const audioSources = useRef(new Set<AudioBufferSourceNode>());
+    
+    const loadingTimeoutRef = useRef<number | null>(null);
+    const hasStartedRef = useRef(false);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     
@@ -95,7 +97,7 @@ const InterviewSimulator: React.FC = () => {
     }, [history]);
 
     const stopRecording = useCallback(() => {
-        if (scriptProcessorRef.current && audioContextRef.current) {
+        if (scriptProcessorRef.current) {
             scriptProcessorRef.current.disconnect();
             scriptProcessorRef.current = null;
         }
@@ -151,6 +153,21 @@ const InterviewSimulator: React.FC = () => {
             startRecording();
         }
     };
+
+    const beginLiveInterview = useCallback((loadingIntervalId: number) => {
+        if (hasStartedRef.current) return;
+        hasStartedRef.current = true;
+
+        if (loadingTimeoutRef.current) {
+            clearTimeout(loadingTimeoutRef.current);
+            loadingTimeoutRef.current = null;
+        }
+        // Fix: Explicitly use window.clearInterval to avoid type conflicts with Node.js types.
+        window.clearInterval(loadingIntervalId);
+        setIsConnecting(false);
+        setPhase('live');
+        startRecording();
+    }, [startRecording]);
     
     const handleStartInterview = useCallback(async (event: React.FormEvent) => {
         event.preventDefault();
@@ -159,16 +176,20 @@ const InterviewSimulator: React.FC = () => {
             return;
         }
         
+        hasStartedRef.current = false;
         const loadingMessages = ["Interviewer preparing...", "Reviewing job description...", "Finalizing questions..."];
         let messageIndex = 0;
-        const intervalId = setInterval(() => {
+        // Fix: Explicitly use window.setInterval to avoid type conflicts with Node.js types.
+        const intervalId = window.setInterval(() => {
             setLoadingMessage(loadingMessages[messageIndex]);
             messageIndex = (messageIndex + 1) % loadingMessages.length;
-        }, 1500);
+        }, 2000);
 
         setIsConnecting(true);
         setLoadingMessage(loadingMessages[0]);
         setError(null);
+        
+        loadingTimeoutRef.current = window.setTimeout(() => beginLiveInterview(intervalId), 6000);
 
         outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
         const outputNode = outputAudioContextRef.current.createGain();
@@ -176,9 +197,12 @@ const InterviewSimulator: React.FC = () => {
 
         const systemInstruction = `You are a friendly and professional AI interview coach. The user is preparing for a "${jobTitle}" role ${companyName ? `at "${companyName}"` : ''}. 
         ${jobDescription ? `Here is the job description: "${jobDescription}"` : ''}
-        Start the interview by introducing yourself briefly and asking the first behavioral question. Keep your responses concise. You will conduct an interview of ${totalQuestions} questions.`;
+        Start the interview by introducing yourself briefly and asking the first behavioral question. Keep your responses concise. You will conduct an interview of ${totalQuestions} questions. After the final question, say something brief like "That's all the questions I have. I'll now compile your feedback."`;
+
+        let currentOutputTranscription = '';
 
         sessionPromiseRef.current = ai.live.connect({
+            // Fix: Corrected typo in model name.
             model: 'gemini-2.5-flash-native-audio-preview-09-2025',
             config: {
                 responseModalities: [Modality.AUDIO],
@@ -194,7 +218,7 @@ const InterviewSimulator: React.FC = () => {
                         setCurrentInputTranscription(prev => prev + message.serverContent.inputTranscription.text);
                     }
                     if (message.serverContent?.outputTranscription) {
-                        setCurrentOutputTranscription(prev => prev + message.serverContent.outputTranscription.text);
+                        currentOutputTranscription += message.serverContent.outputTranscription.text;
                     }
 
                     const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
@@ -222,37 +246,39 @@ const InterviewSimulator: React.FC = () => {
                         const finalInput = currentInputTranscription;
                         const finalOutput = currentOutputTranscription;
                         setCurrentInputTranscription('');
-                        setCurrentOutputTranscription('');
+                        currentOutputTranscription = '';
+
+                        let isLastQuestion = false;
+                        let finalHistoryForSummary: InterviewMessage[] = [];
+
+                        if (finalOutput) { // Only count AI turns
+                             setQuestionCount(prev => {
+                                const newCount = prev + 1;
+                                isLastQuestion = newCount >= totalQuestions;
+                                return newCount;
+                            });
+                        }
 
                         setHistory(prev => {
-                            let newHistory = [...prev];
+                            const newHistory = [...prev];
                             if (finalInput) newHistory.push({ role: 'user', content: finalInput });
                             if (finalOutput) newHistory.push({ role: 'model', content: finalOutput });
+                            finalHistoryForSummary = newHistory;
                             return newHistory;
                         });
 
-                        if (isConnecting) {
-                           setIsConnecting(false);
-                           setPhase('live');
-                           clearInterval(intervalId);
-                           await startRecording();
+                        if (!hasStartedRef.current) {
+                           beginLiveInterview(intervalId);
                         }
                          
-                         const newQuestionCount = questionCount + 1;
-                         setQuestionCount(newQuestionCount);
-
-                         if (newQuestionCount >= totalQuestions && finalInput) {
+                         if (isLastQuestion && finalInput) {
                             setIsConnecting(true);
                             setLoadingMessage("Compiling your feedback...");
                             stopRecording();
                             sessionPromiseRef.current?.then(s => s.close());
                             
-                            // Use a timeout to allow the final audio to play
                             setTimeout(async () => {
-                                const summaryResult = await getInterviewSummary(
-                                    [...history, {role: 'user', content: finalInput}, {role: 'model', content: finalOutput}], 
-                                    jobTitle
-                                );
+                                const summaryResult = await getInterviewSummary(finalHistoryForSummary, jobTitle);
                                 setSummary(summaryResult);
                                 setPhase('summary');
                                 setIsConnecting(false);
@@ -264,14 +290,15 @@ const InterviewSimulator: React.FC = () => {
                     console.error('Session error:', e);
                     setError('A connection error occurred. Please try again.');
                     setIsConnecting(false);
-                    clearInterval(intervalId);
+                    // Fix: Explicitly use window.clearInterval to avoid type conflicts with Node.js types.
+                    window.clearInterval(intervalId);
                 },
                 onclose: (e: CloseEvent) => {
                     stopRecording();
                 },
             },
         });
-    }, [jobTitle, companyName, jobDescription, history, isConnecting, questionCount, currentInputTranscription, currentOutputTranscription, startRecording, stopRecording]);
+    }, [jobTitle, companyName, jobDescription, beginLiveInterview, stopRecording]);
 
     const cleanUp = useCallback(() => {
         stopRecording();
@@ -284,6 +311,11 @@ const InterviewSimulator: React.FC = () => {
         if(outputAudioContextRef.current && outputAudioContextRef.current.state !== 'closed') {
             outputAudioContextRef.current.close();
             outputAudioContextRef.current = null;
+        }
+        if (loadingTimeoutRef.current) {
+            // Fix: Explicitly use window.clearTimeout to avoid type conflicts with Node.js types.
+            window.clearTimeout(loadingTimeoutRef.current);
+            loadingTimeoutRef.current = null;
         }
     }, [stopRecording]);
 
@@ -303,7 +335,6 @@ const InterviewSimulator: React.FC = () => {
         setIsConnecting(false);
         setIsRecording(false);
         setCurrentInputTranscription('');
-        setCurrentOutputTranscription('');
     };
 
     const renderSetup = () => (

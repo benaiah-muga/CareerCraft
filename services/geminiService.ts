@@ -1,9 +1,8 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import type { ResumeAnalysisResult, InterviewMessage, InterviewSummary } from '../types';
 
-// Fix: Use import.meta.env.VITE_GEMINI_API_KEY for Vite environment variables.
-const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
+// Fix: Use process.env.API_KEY to align with environment variable standards.
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const resumeSchema = {
     type: Type.OBJECT,
