@@ -5,6 +5,9 @@ import ScoreCircle from '../components/ScoreCircle';
 import { ThumbsUpIcon, LightbulbIcon, TargetIcon, PlusCircleIcon, UploadIcon, HomeIcon, ChatBubbleLeftRightIcon } from '../components/icons';
 import type { View } from '../App';
 
+// Helper to remove markdown bolding
+const cleanMarkdown = (text: string) => text.replace(/\*\*/g, '');
+
 const FeedbackSection: React.FC<{ title: string; items: string[]; icon: React.ReactNode }> = ({ title, items, icon }) => (
     <div>
         <h3 className="text-lg font-semibold flex items-center text-gray-700 mb-2">
@@ -12,7 +15,7 @@ const FeedbackSection: React.FC<{ title: string; items: string[]; icon: React.Re
             <span className="ml-2">{title}</span>
         </h3>
         <ul className="list-disc list-inside space-y-1 text-gray-600">
-            {items.map((item, index) => <li key={index}>{item}</li>)}
+            {items.map((item, index) => <li key={index}>{cleanMarkdown(item)}</li>)}
         </ul>
     </div>
 );
@@ -156,7 +159,7 @@ const ResumeAnalyzer: React.FC<ResumeAnalyzerProps> = ({ setView }) => {
                                 {analysis.actionableImprovements.map((item, index) => (
                                     <div key={index} className="flex items-start">
                                         <PlusCircleIcon className="w-6 h-6 text-blue-500 flex-shrink-0 mt-1 mr-3" />
-                                        <p className="text-gray-700">{item}</p>
+                                        <p className="text-gray-700">{cleanMarkdown(item)}</p>
                                     </div>
                                 ))}
                             </div>

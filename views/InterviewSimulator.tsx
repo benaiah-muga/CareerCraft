@@ -6,6 +6,9 @@ import { CheckCircleIcon, LightbulbIcon, TargetIcon, ThumbsUpIcon } from '../com
 
 type InterviewPhase = 'setup' | 'live' | 'summary';
 
+// Helper to remove markdown bolding
+const cleanMarkdown = (text: string) => text.replace(/\*\*/g, '');
+
 const InterviewSimulator: React.FC = () => {
     const [phase, setPhase] = useState<InterviewPhase>('setup');
     const [jobTitle, setJobTitle] = useState('');
@@ -150,7 +153,7 @@ const InterviewSimulator: React.FC = () => {
                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" /></svg>
                                 </div>
                                 <div className="bg-gray-100 rounded-lg p-3 max-w-lg">
-                                    <p>{msg.content}</p>
+                                    <p>{cleanMarkdown(msg.content)}</p>
                                 </div>
                             </div>
                         ) : (
@@ -161,9 +164,9 @@ const InterviewSimulator: React.FC = () => {
                                 {msg.feedback && (
                                     <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg w-full max-w-lg space-y-2">
                                         <h4 className="font-semibold text-sm text-green-800">Feedback on your answer:</h4>
-                                        <FeedbackPill icon={<CheckCircleIcon className="w-5 h-5 text-green-600"/>} label="Clarity" text={msg.feedback.clarity} />
-                                        <FeedbackPill icon={<CheckCircleIcon className="w-5 h-5 text-green-600"/>} label="Confidence" text={msg.feedback.confidence} />
-                                        <FeedbackPill icon={<CheckCircleIcon className="w-5 h-5 text-green-600"/>} label="Relevance" text={msg.feedback.relevance} />
+                                        <FeedbackPill icon={<CheckCircleIcon className="w-5 h-5 text-green-600"/>} label="Clarity" text={cleanMarkdown(msg.feedback.clarity)} />
+                                        <FeedbackPill icon={<CheckCircleIcon className="w-5 h-5 text-green-600"/>} label="Confidence" text={cleanMarkdown(msg.feedback.confidence)} />
+                                        <FeedbackPill icon={<CheckCircleIcon className="w-5 h-5 text-green-600"/>} label="Relevance" text={cleanMarkdown(msg.feedback.relevance)} />
                                     </div>
                                 )}
                             </div>
@@ -207,13 +210,13 @@ const InterviewSimulator: React.FC = () => {
                         <div>
                             <h4 className="font-bold text-lg mb-3 flex items-center"><ThumbsUpIcon className="w-6 h-6 text-green-500 mr-2"/>Your Strengths</h4>
                             <ul className="space-y-2">
-                                {summary.strengths.map((s, i) => <li key={i} className="flex items-start"><CheckCircleIcon className="w-5 h-5 text-green-500 mr-2 mt-1 flex-shrink-0"/><span>{s}</span></li>)}
+                                {summary.strengths.map((s, i) => <li key={i} className="flex items-start"><CheckCircleIcon className="w-5 h-5 text-green-500 mr-2 mt-1 flex-shrink-0"/><span>{cleanMarkdown(s)}</span></li>)}
                             </ul>
                         </div>
                          <div>
                             <h4 className="font-bold text-lg mb-3 flex items-center"><LightbulbIcon className="w-6 h-6 text-yellow-500 mr-2"/>Areas for Improvement</h4>
                             <ul className="space-y-2">
-                                {summary.areasForImprovement.map((a, i) => <li key={i} className="flex items-start"><TargetIcon className="w-5 h-5 text-yellow-500 mr-2 mt-1 flex-shrink-0"/><span>{a}</span></li>)}
+                                {summary.areasForImprovement.map((a, i) => <li key={i} className="flex items-start"><TargetIcon className="w-5 h-5 text-yellow-500 mr-2 mt-1 flex-shrink-0"/><span>{cleanMarkdown(a)}</span></li>)}
                             </ul>
                         </div>
                     </div>
